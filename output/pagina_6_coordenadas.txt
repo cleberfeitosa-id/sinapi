@@ -1,0 +1,6 @@
+# pagina_6
+# Total: 2
+
+numero,tipo,x,y
+1,quadro,4206,749
+2,caixa_passagem,4194,667

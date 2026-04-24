@@ -1,0 +1,8 @@
+# pagina_5
+# Total: 4
+
+numero,tipo,x,y
+1,quadro,1088,1756
+2,quadro,1256,1872
+3,quadro,1180,2018
+4,quadro,1049,2020

@@ -1,0 +1,35 @@
+# pagina_13
+# Total: 31
+
+numero,tipo,x,y
+1,caixa_passagem,617,536
+2,caixa_passagem,821,539
+3,caixa_passagem,1006,540
+4,caixa_passagem,1182,538
+5,caixa_passagem,1386,541
+6,caixa_passagem,1577,539
+7,caixa_passagem,1773,538
+8,caixa_passagem,1962,537
+9,caixa_passagem,2147,534
+10,caixa_passagem,2333,542
+11,caixa_passagem,2526,542
+12,caixa_passagem,2709,539
+13,caixa_passagem,2901,538
+14,caixa_passagem,3089,539
+15,caixa_passagem,3284,539
+16,caixa_passagem,3485,539
+17,caixa_passagem,3282,1787
+18,caixa_passagem,3097,1786
+19,caixa_passagem,2902,1792
+20,caixa_passagem,2706,1793
+21,caixa_passagem,2515,1788
+22,caixa_passagem,2323,1789
+23,caixa_passagem,2146,1791
+24,caixa_passagem,1947,1791
+25,caixa_passagem,1767,1789
+26,caixa_passagem,1569,1791
+27,caixa_passagem,1395,1795
+28,caixa_passagem,1198,1791
+29,caixa_passagem,1005,1789
+30,caixa_passagem,820,1793
+31,caixa_passagem,630,1789

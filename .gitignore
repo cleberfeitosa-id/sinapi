@@ -39,6 +39,9 @@ env/
 .DS_Store
 Thumbs.db
 
-# Data files (keep in repo)
+# Data files - optional large files
+# Uncomment if needed:
 # data/*.xlsx
 # data/*.pdf
+output/*.pdf
+output/*.xlsx

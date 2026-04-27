@@ -17,8 +17,9 @@ import numpy as np
 from pathlib import Path
 import base64
 from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, json
 from pdf2image import convert_from_path
 
 app = Flask(__name__)
@@ -77,7 +78,7 @@ predefinicoes = {
         {"id": "ventilador", "nome": "Ventilador"},
         {"id": "reservatorio", "nome": "Reservatório"},
     ],
-    "Hidrossanitário": [
+    "Junções": [
         {"id": "curva_90_pvc", "nome": "Curva 90° PVC"},
         {"id": "joelho_90_pvc", "nome": "Joelho 90° PVC"},
         {"id": "curva_45_pvc", "nome": "Curva 45° PVC"},
@@ -114,7 +115,6 @@ cores_tipo = {
     "quadro_comando": "#ff6347",
     "ventilador": "#64c864",
     "reservatorio": "#009696",
-    # Hidrossanitário
     "curva_90_pvc": "#00ced1",
     "joelho_90_pvc": "#20b2aa",
     "curva_45_pvc": "#48d1cc",
@@ -126,6 +126,21 @@ cores_tipo = {
     "caixa_inspecao": "#dda0dd",
     "ralo": "#b0c4de",
     "outro": "#ffffff",
+}
+
+config_marker = {
+    "raio": 35,
+    "espessura": 3,
+    "fonte_escala": 1.2,
+    "fonte_grossura": 3,
+    "cor_borda": "#000000",
+    "cor_texto": "#ffffff",
+    "zoom_inicial": 5.0,
+    "legenda_posicao": "baixo-dir",
+    "legenda_tamanho_fonte": 0.8,
+    "legenda_cor_fundo": "#000000",
+    "legenda_cor_texto": "#ffffff",
+    "legenda_opacidade": 255,
 }
 
 
@@ -147,23 +162,182 @@ def carregar_imagem(path, pagina, dpi):
     return img_global
 
 
-def gerar_imagem_base64(img, zoom, off_x, off_y, marcacoes):
+def adicionar_legenda(img, marcacoes, nomes_personalizados, config_legenda=None):
+    if config_legenda is None:
+        config_legenda = {}
+
+    posicao = config_legenda.get("posicao", "baixo-dir")
+    escala_legenda = config_legenda.get("tamanho_fonte", 0.8)
+    opacidade = config_legenda.get("opacidade", 255)
+    cor_fundo = config_legenda.get("cor_fundo", "#000000")
+    cor_texto = config_legenda.get("cor_texto", "#ffffff")
+
+    tipos_presentes = {}
+    for _, _, _, tipo in marcacoes:
+        if tipo not in tipos_presentes:
+            nome = tipo
+            for disc, itens in predefinicoes.items():
+                for item in itens:
+                    if item["id"] == tipo:
+                        nome = nomes_personalizados.get(disc, {}).get(
+                            tipo, item["nome"]
+                        )
+                        break
+            tipos_presentes[tipo] = nome
+
+    if not tipos_presentes:
+        return img
+
+    h, w = img.shape[:2]
+    fonte = cv2.FONT_HERSHEY_DUPLEX
+    grossura = 1
+    padding = int(12 * escala_legenda)
+    espaco_linha = int(24 * escala_legenda)
+    raio_legenda = max(6, int(8 * escala_legenda))
+
+    linhas = []
+    for tipo, nome in tipos_presentes.items():
+        cor = cores_tipo.get(tipo, "#ffffff")
+        r = int(cor[1:3], 16)
+        g = int(cor[3:5], 16)
+        b = int(cor[5:7], 16)
+        count = sum(1 for m in marcacoes if m[3] == tipo)
+        texto = f"{nome}: {count}"
+        linhas.append((texto, (r, g, b), cor))
+
+    max_largura = 0
+    max_altura = 0
+    for texto, _, _ in linhas:
+        (tw, th), _ = cv2.getTextSize(texto, fonte, escala_legenda, grossura)
+        max_largura = max(max_largura, tw)
+        max_altura = max(max_altura, th)
+
+    largura_legenda = max_largura + raio_legenda * 2 + padding * 3 + 20
+    altura_legenda = len(linhas) * espaco_linha + padding * 2
+
+    fb = int(cor_fundo[1:3], 16)
+    fg = int(cor_fundo[3:5], 16)
+    fr = int(cor_fundo[5:7], 16)
+
+    tb = int(cor_texto[1:3], 16)
+    tg = int(cor_texto[3:5], 16)
+    tr = int(cor_texto[5:7], 16)
+
+    if posicao == "baixo-dir":
+        x_legenda = w - largura_legenda - 20
+        y_legenda = h - altura_legenda - 20
+    elif posicao == "baixo-esq":
+        x_legenda = 20
+        y_legenda = h - altura_legenda - 20
+    elif posicao == "topo-dir":
+        x_legenda = w - largura_legenda - 20
+        y_legenda = 20
+    elif posicao == "topo-esq":
+        x_legenda = 20
+        y_legenda = 20
+    else:
+        x_legenda = w - largura_legenda - 20
+        y_legenda = h - altura_legenda - 20
+
+    resultado = img.copy()
+
+    if opacidade < 255:
+        fundo_legenda = np.zeros((h, w, 3), dtype=np.uint8)
+        cv2.rectangle(
+            fundo_legenda,
+            (x_legenda, y_legenda),
+            (x_legenda + largura_legenda, y_legenda + altura_legenda),
+            (fb, fg, fr),
+            -1,
+        )
+        alpha = opacidade / 255.0
+        for y in range(y_legenda, min(y_legenda + altura_legenda, h)):
+            for x in range(x_legenda, min(x_legenda + largura_legenda, w)):
+                resultado[y, x] = (
+                    fundo_legenda[y, x] * alpha + resultado[y, x] * (1 - alpha)
+                ).astype(np.uint8)
+    else:
+        cv2.rectangle(
+            resultado,
+            (x_legenda, y_legenda),
+            (x_legenda + largura_legenda, y_legenda + altura_legenda),
+            (fb, fg, fr),
+            -1,
+        )
+
+    cv2.rectangle(
+        resultado,
+        (x_legenda, y_legenda),
+        (x_legenda + largura_legenda, y_legenda + altura_legenda),
+        (tb, tg, tr),
+        1,
+    )
+
+    img_pil = Image.fromarray(cv2.cvtColor(resultado, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(img_pil)
+
+    try:
+        font_path = "/System/Library/Fonts/Helvetica.ttc"
+        font = ImageFont.truetype(font_path, int(20 * escala_legenda))
+    except:
+        font = ImageFont.load_default()
+
+    for i, (texto, (b, g, r), cor_hex) in enumerate(linhas):
+        y = y_legenda + padding + espaco_linha * i + max_altura
+
+        circle_x = x_legenda + padding + raio_legenda + 10
+        circle_y = y - raio_legenda // 2
+
+        draw.ellipse(
+            [
+                circle_x - raio_legenda,
+                circle_y - raio_legenda,
+                circle_x + raio_legenda,
+                circle_y + raio_legenda,
+            ],
+            fill=(r, g, b),
+            outline=(tb, tg, tr),
+        )
+
+        bbox = draw.textbbox((0, 0), texto, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_x = circle_x + raio_legenda + 15
+        text_y = y - (bbox[3] - bbox[1]) // 2
+
+        draw.text(
+            (text_x, text_y),
+            texto,
+            font=font,
+            fill=(tb, tg, tr),
+        )
+
+    resultado = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+
+    return resultado
+
+
+def gerar_imagem_base64(img, zoom, off_x, off_y, marcacoes, cfg=None):
+    if cfg is None:
+        cfg = config_marker
+
+    raio = cfg.get("raio", 35)
+    espessura = cfg.get("espessura", 3)
+    fonte_escala = cfg.get("fonte_escala", 1.2)
+    fonte_grossura = cfg.get("fonte_grossura", 3)
+    cor_borda = cfg.get("cor_borda", "#000000")
+    cor_texto = cfg.get("cor_texto", "#ffffff")
+
     h, w = img.shape[:2]
 
-    # Calcula tamanho da view baseada no zoom (zoom 1 = imagem inteira, zoom 5 = 1/5)
     view_w = int(w / zoom)
     view_h = int(h / zoom)
 
-    # Recorta a região de interesse
     roi = img[off_y : min(off_y + view_h, h), off_x : min(off_x + view_w, w)]
 
     if roi.size > 0:
-        # Redimensiona a ROI para o tamanho de visualização (mantendo qualidade)
         disp = cv2.resize(roi, (int(roi.shape[1] * zoom), int(roi.shape[0] * zoom)))
 
-        # Desenha as marcações
         for x_orig, y_orig, num, tipo in marcacoes:
-            # Calcula posição relativa ao offset atual
             x_disp = int((x_orig - off_x) * zoom)
             y_disp = int((y_orig - off_y) * zoom)
 
@@ -173,39 +347,42 @@ def gerar_imagem_base64(img, zoom, off_x, off_y, marcacoes):
                 g = int(cor[3:5], 16)
                 r = int(cor[5:7], 16)
 
-                # Raio maior para melhor visibilidade
-                raio = max(25, int(35 * zoom))
-                cv2.circle(disp, (x_disp, y_disp), raio, (b, g, r), -1)
-                cv2.circle(disp, (x_disp, y_disp), raio, (0, 0, 0), 3)
+                rb = int(cor_borda[1:3], 16)
+                gb = int(cor_borda[3:5], 16)
+                rt = int(cor_borda[5:7], 16)
 
-                # Texto maior (metade do raio) e branco com borda preta
+                tb = int(cor_texto[1:3], 16)
+                tg = int(cor_texto[3:5], 16)
+                tr = int(cor_texto[5:7], 16)
+
+                cv2.circle(disp, (x_disp, y_disp), raio, (b, g, r), -1)
+                cv2.circle(disp, (x_disp, y_disp), raio, (rb, gb, rt), espessura)
+
                 texto = str(num)
                 fonte = cv2.FONT_HERSHEY_SIMPLEX
-                escala = max(1.2, 1.5 * zoom)
-                grossura = 3
 
-                # Primeiro desenha borda preta
-                (tw, th), baseline = cv2.getTextSize(texto, fonte, escala, grossura)
+                (tw, th), baseline = cv2.getTextSize(
+                    texto, fonte, fonte_escala, fonte_grossura
+                )
                 cv2.putText(
                     disp,
                     texto,
                     (x_disp - tw // 2, y_disp + th // 2 + baseline),
                     fonte,
-                    escala,
+                    fonte_escala,
                     (0, 0, 0),
-                    grossura + 2,
+                    fonte_grossura + 2,
                     cv2.LINE_AA,
                 )
 
-                # Depois desenha texto branco
                 cv2.putText(
                     disp,
                     texto,
                     (x_disp - tw // 2, y_disp + th // 2 + baseline),
                     fonte,
-                    escala,
-                    (255, 255, 255),
-                    grossura,
+                    fonte_escala,
+                    (tb, tg, tr),
+                    fonte_grossura,
                     cv2.LINE_AA,
                 )
     else:
@@ -425,6 +602,54 @@ HTML_TEMPLATE = """
             margin-top: 15px;
         }
         
+        .config-panel {
+            background: #1e1e1e;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        
+        .config-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            font-size: 0.85rem;
+        }
+        
+        .config-label {
+            color: #888;
+            min-width: 70px;
+        }
+        
+        .config-row input[type="range"] {
+            flex: 1;
+            cursor: pointer;
+        }
+        
+        .config-row input[type="color"] {
+            width: 40px;
+            height: 25px;
+            border: none;
+            cursor: pointer;
+        }
+        
+        .config-row select {
+            flex: 1;
+            padding: 5px;
+            background: #1e1e1e;
+            border: 1px solid #333;
+            color: white;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        
+        .config-value {
+            color: #0d7377;
+            font-weight: bold;
+            min-width: 30px;
+        }
+        
         .btn-save {
             flex: 1;
             background: #0d7377;
@@ -445,6 +670,36 @@ HTML_TEMPLATE = """
             border-radius: 5px;
             cursor: pointer;
             font-weight: bold;
+        }
+        
+        .btn-preview {
+            flex: 1;
+            background: #2196F3;
+            color: white;
+            padding: 12px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .btn-preview:hover {
+            background: #1976D2;
+        }
+        
+        .btn-back {
+            flex: 1;
+            background: #FF9800;
+            color: white;
+            padding: 12px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .btn-back:hover {
+            background: #F57C00;
         }
         
         .main-area {
@@ -593,6 +848,75 @@ HTML_TEMPLATE = """
                     <span class="info-value total" id="info-total">0</span>
                 </div>
             </div>
+        </div>
+        
+        <div class="section">
+            <h3>Configurações do Marcador</h3>
+            <div class="config-panel">
+                <div class="config-row">
+                    <span class="config-label">Raio:</span>
+                    <input type="range" id="config-raio" min="10" max="100" value="{{ config.raio }}" onchange="atualizarConfig()">
+                    <span class="config-value" id="val-raio">{{ config.raio }}</span>
+                </div>
+                <div class="config-row">
+                    <span class="config-label">Espessura:</span>
+                    <input type="range" id="config-espessura" min="1" max="10" value="{{ config.espessura }}" onchange="atualizarConfig()">
+                    <span class="config-value" id="val-espessura">{{ config.espessura }}</span>
+                </div>
+                <div class="config-row">
+                    <span class="config-label">Fonte:</span>
+                    <input type="range" id="config-fonte" min="0.5" max="3" step="0.1" value="{{ config.fonte_escala }}" onchange="atualizarConfig()">
+                    <span class="config-value" id="val-fonte">{{ config.fonte_escala }}</span>
+                </div>
+                <div class="config-row">
+                    <span class="config-label">Cor texto:</span>
+                    <input type="color" id="config-cor" value="{{ config.cor_texto }}" onchange="atualizarConfig()">
+                </div>
+                <div class="config-row">
+                    <span class="config-label">Cor borda:</span>
+                    <input type="color" id="config-cor-borda" value="{{ config.cor_borda }}" onchange="atualizarConfig()">
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>Gerar Visualização Final</h3>
+            <div class="config-panel">
+                <div class="config-row">
+                    <span class="config-label">Posição:</span>
+                    <select id="legenda-posicao" onchange="atualizarLegenda()">
+                        <option value="baixo-dir">⬌ Baixo-Direita</option>
+                        <option value="baixo-esq">⬌ Baixo-Esquerda</option>
+                        <option value="topo-dir">⬌ Topo-Direita</option>
+                        <option value="topo-esq">⬌ Topo-Esquerda</option>
+                    </select>
+                </div>
+                <div class="config-row">
+                    <span class="config-label">Fonte:</span>
+                    <input type="range" id="legenda-fonte" min="0.5" max="5.0" step="0.1" value="0.8" onchange="atualizarLegenda()">
+                    <span class="config-value" id="val-legenda-fonte">0.8</span>
+                </div>
+                <div class="config-row">
+                    <span class="config-label">Transp.:</span>
+                    <input type="range" id="legenda-opacidade" min="0" max="255" step="5" value="255" onchange="atualizarLegenda()">
+                    <span class="config-value" id="val-legenda-opacidade">255</span>
+                </div>
+                <div class="config-row">
+                    <span class="config-label">Fundo:</span>
+                    <input type="color" id="legenda-cor-fundo" value="#000000" onchange="atualizarLegenda()">
+                </div>
+                <div class="config-row">
+                    <span class="config-label">Texto:</span>
+                    <input type="color" id="legenda-cor-texto" value="#ffffff" onchange="atualizarLegenda()">
+                </div>
+            </div>
+            <div class="actions" style="margin-top: 10px;">
+                <button class="btn-preview" onclick="gerarLegenda()">📋 Gerar com Legenda</button>
+                <button class="btn-back" id="btn-voltar" onclick="voltarEdicao()" style="display:none">✏️ Voltar a Editar</button>
+            </div>
+        </div>
+        
+        <div class="section">
             <div class="actions">
                 <button class="btn-save" onclick="salvar()">💾 Salvar</button>
                 <button class="btn-clear" onclick="resetAll()">🔄 Reset</button>
@@ -628,8 +952,8 @@ HTML_TEMPLATE = """
         let offsetY = 0;
         let selectedDisciplina = 'Elétrica';
         let nomesPersonalizados = {{ nomes_json | safe }};
+        let markerConfig = {{ config | safe }};
         
-        // Elementos por disciplina para atalhos numéricos
         const elementosPorDisciplina = {
             {% for disciplina, elementos in predefinicoes.items() %}
             "{{ disciplina }}": [
@@ -835,6 +1159,96 @@ HTML_TEMPLATE = """
             });
         }
         
+        function atualizarConfig() {
+            const raio = parseInt(document.getElementById('config-raio').value);
+            const espessura = parseInt(document.getElementById('config-espessura').value);
+            const fonte_escala = parseFloat(document.getElementById('config-fonte').value);
+            const cor_texto = document.getElementById('config-cor').value;
+            const cor_borda = document.getElementById('config-cor-borda').value;
+            
+            document.getElementById('val-raio').textContent = raio;
+            document.getElementById('val-espessura').textContent = espessura;
+            document.getElementById('val-fonte').textContent = fonte_escala;
+            
+            markerConfig = {
+                raio: raio,
+                espessura: espessura,
+                fonte_escala: fonte_escala,
+                fonte_grossura: 3,
+                cor_borda: cor_borda,
+                cor_texto: cor_texto,
+                zoom_inicial: 5.0
+            };
+            
+            fetch('/atualizar-config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(markerConfig)
+            }).then(() => updateImage());
+        }
+        
+let modoLegenda = false;
+        
+        function gerarLegenda() {
+            fetch('/contagem-total')
+                .then(r => r.json())
+                .then(d => {
+                    if (d.total === 0) {
+                        alert('Marque alguns elementos primeiro');
+                        return;
+                    }
+                    document.getElementById('btn-voltar').style.display = 'block';
+                    document.querySelector('.sidebar').style.opacity = '0.85';
+                    document.getElementById('canvas').style.cursor = 'default';
+                    document.getElementById('canvas').style.pointerEvents = 'none';
+                    
+                    const posicao = document.getElementById('legenda-posicao').value;
+                    const tamanhoFonte = document.getElementById('legenda-fonte').value;
+                    const opacidade = document.getElementById('legenda-opacidade').value;
+                    const corFundo = document.getElementById('legenda-cor-fundo').value;
+                    const corTexto = document.getElementById('legenda-cor-texto').value;
+                    
+                    fetch('/atualizar-config-legenda', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            posicao: posicao,
+                            tamanho_fonte: parseFloat(tamanhoFonte),
+                            opacidade: parseInt(opacidade),
+                            cor_fundo: corFundo,
+                            cor_texto: corTexto
+                        })
+                    });
+                    
+                    const params = new URLSearchParams({
+                        posicao: posicao,
+                        tamanho_fonte: tamanhoFonte,
+                        opacidade: opacidade,
+                        cor_fundo: corFundo,
+                        cor_texto: corTexto
+                    });
+                    
+                    fetch('/image-legenda?' + params)
+                        .then(r => r.json())
+                        .then(d => {
+                            document.getElementById('canvas').src = d.img;
+                        });
+                });
+        }
+        
+        function atualizarLegenda() {
+            document.getElementById('val-legenda-fonte').textContent = document.getElementById('legenda-fonte').value;
+            document.getElementById('val-legenda-opacidade').textContent = document.getElementById('legenda-opacidade').value;
+        }
+        
+        function voltarEdicao() {
+            document.getElementById('btn-voltar').style.display = 'none';
+            document.querySelector('.sidebar').style.opacity = '1';
+            document.getElementById('canvas').style.cursor = 'crosshair';
+            document.getElementById('canvas').style.pointerEvents = 'auto';
+            updateImage();
+        }
+        
         let imgWidth = 0;
         let imgHeight = 0;
         let currentZoom = {{ initial_zoom }};
@@ -968,7 +1382,9 @@ def index():
     if img_global is None:
         return "Nenhuma imagem carregada"
 
-    img_src = gerar_imagem_base64(img_global, zoom, offset_x, offset_y, marcacoes)
+    img_src = gerar_imagem_base64(
+        img_global, zoom, offset_x, offset_y, marcacoes, config_marker
+    )
 
     nomes_json = {}
     for disc, itens in predefinicoes.items():
@@ -987,6 +1403,7 @@ def index():
         initial_zoom=zoom,
         initial_offset_x=offset_x,
         initial_offset_y=offset_y,
+        config=json.dumps(config_marker),
     )
 
 
@@ -1003,7 +1420,9 @@ def get_image():
             }
         )
 
-    img_src = gerar_imagem_base64(img_global, zoom, offset_x, offset_y, marcacoes)
+    img_src = gerar_imagem_base64(
+        img_global, zoom, offset_x, offset_y, marcacoes, config_marker
+    )
     return jsonify(
         {
             "img": img_src,
@@ -1012,6 +1431,103 @@ def get_image():
             "offsetX": offset_x,
             "offsetY": offset_y,
         }
+    )
+
+
+@app.route("/contagem-total")
+def contagem_total():
+    return jsonify({"total": len(marcacoes)})
+
+
+@app.route("/image-legenda")
+def get_image_legenda():
+    posicao = request.args.get(
+        "posicao", config_marker.get("legenda_posicao", "baixo-dir")
+    )
+    tamanho_fonte = float(
+        request.args.get(
+            "tamanho_fonte", config_marker.get("legenda_tamanho_fonte", 0.8)
+        )
+    )
+    opacidade = int(
+        request.args.get("opacidade", config_marker.get("legenda_opacidade", 255))
+    )
+    cor_fundo = request.args.get(
+        "cor_fundo", config_marker.get("legenda_cor_fundo", "#000000")
+    )
+    cor_texto = request.args.get(
+        "cor_texto", config_marker.get("legenda_cor_texto", "#ffffff")
+    )
+
+    config_legenda = {
+        "posicao": posicao,
+        "tamanho_fonte": tamanho_fonte,
+        "opacidade": opacidade,
+        "cor_fundo": cor_fundo,
+        "cor_texto": cor_texto,
+    }
+
+    if img_global is None:
+        return jsonify({"img": "", "total": 0})
+
+    img_com_marcas = img_global.copy()
+    cfg = config_marker
+    raio = cfg.get("raio", 35)
+    espessura = cfg.get("espessura", 3)
+    fonte_escala = cfg.get("fonte_escala", 1.2)
+    fonte_grossura = cfg.get("fonte_grossura", 3)
+    cor_borda = cfg.get("cor_borda", "#000000")
+    cor_texto_marker = cfg.get("cor_texto", "#ffffff")
+
+    rb = int(cor_borda[1:3], 16)
+    gb = int(cor_borda[3:5], 16)
+    rt = int(cor_borda[5:7], 16)
+    tb = int(cor_texto_marker[1:3], 16)
+    tg = int(cor_texto_marker[3:5], 16)
+    tr = int(cor_texto_marker[5:7], 16)
+
+    for x, y, num, tipo in marcacoes:
+        cor = cores_tipo.get(tipo, "#ffffff")
+        b = int(cor[1:3], 16)
+        g = int(cor[3:5], 16)
+        r = int(cor[5:7], 16)
+
+        cv2.circle(img_com_marcas, (x, y), raio, (b, g, r), -1)
+        cv2.circle(img_com_marcas, (x, y), raio, (rb, gb, rt), espessura)
+
+        texto = str(num)
+        fonte = cv2.FONT_HERSHEY_SIMPLEX
+
+        (tw, th), baseline = cv2.getTextSize(texto, fonte, fonte_escala, fonte_grossura)
+        cv2.putText(
+            img_com_marcas,
+            texto,
+            (x - tw // 2, y + th // 2 + baseline),
+            fonte,
+            fonte_escala,
+            (0, 0, 0),
+            fonte_grossura + 2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            img_com_marcas,
+            texto,
+            (x - tw // 2, y + th // 2 + baseline),
+            fonte,
+            fonte_escala,
+            (tb, tg, tr),
+            fonte_grossura,
+            cv2.LINE_AA,
+        )
+
+    img_com_legenda = adicionar_legenda(
+        img_com_marcas, marcacoes, nomes_personalizados, config_legenda
+    )
+    img_com_legenda_bgr = cv2.cvtColor(img_com_legenda, cv2.COLOR_RGB2BGR)
+    _, buffer = cv2.imencode(".png", img_com_legenda_bgr)
+    img_base64 = base64.b64encode(buffer).decode()
+    return jsonify(
+        {"img": f"data:image/png;base64,{img_base64}", "total": len(marcacoes)}
     )
 
 
@@ -1193,10 +1709,26 @@ def set_offset():
 
 @app.route("/salvar", methods=["POST"])
 def salvar():
-    global img_global, nome_base, marcacoes
+    global img_global, nome_base, marcacoes, config_marker
 
+    print(f"[DEBUG] /salvar chamado - marcacoes: {len(marcacoes)}")
     if img_global is None:
         return jsonify({"files": []})
+
+    cfg = config_marker
+    raio = cfg.get("raio", 35)
+    espessura = cfg.get("espessura", 3)
+    fonte_escala = cfg.get("fonte_escala", 1.2)
+    fonte_grossura = cfg.get("fonte_grossura", 3)
+    cor_borda = cfg.get("cor_borda", "#000000")
+    cor_texto = cfg.get("cor_texto", "#ffffff")
+
+    rb = int(cor_borda[1:3], 16)
+    gb = int(cor_borda[3:5], 16)
+    rt = int(cor_borda[5:7], 16)
+    tb = int(cor_texto[1:3], 16)
+    tg = int(cor_texto[3:5], 16)
+    tr = int(cor_texto[5:7], 16)
 
     img_marcada = img_global.copy()
     for x, y, num, tipo in marcacoes:
@@ -1205,24 +1737,21 @@ def salvar():
         g = int(cor[3:5], 16)
         r = int(cor[5:7], 16)
 
-        raio = 35
         cv2.circle(img_marcada, (x, y), raio, (b, g, r), -1)
-        cv2.circle(img_marcada, (x, y), raio, (0, 0, 0), 3)
+        cv2.circle(img_marcada, (x, y), raio, (rb, gb, rt), espessura)
 
         texto = str(num)
         fonte = cv2.FONT_HERSHEY_SIMPLEX
-        escala = 1.2
-        grossura = 3
 
-        (tw, th), baseline = cv2.getTextSize(texto, fonte, escala, grossura)
+        (tw, th), baseline = cv2.getTextSize(texto, fonte, fonte_escala, fonte_grossura)
         cv2.putText(
             img_marcada,
             texto,
             (x - tw // 2, y + th // 2 + baseline),
             fonte,
-            escala,
+            fonte_escala,
             (0, 0, 0),
-            grossura + 2,
+            fonte_grossura + 2,
             cv2.LINE_AA,
         )
         cv2.putText(
@@ -1230,25 +1759,38 @@ def salvar():
             texto,
             (x - tw // 2, y + th // 2 + baseline),
             fonte,
-            escala,
-            (255, 255, 255),
-            grossura,
+            fonte_escala,
+            (tb, tg, tr),
+            fonte_grossura,
             cv2.LINE_AA,
         )
 
-    # Salvar imagem PNG
-    saida_img = f"{nome_base}_marcado.png"
-    cv2.imwrite(saida_img, img_marcada)
+    config_legenda = {
+        "posicao": config_marker.get("legenda_posicao", "baixo-dir"),
+        "tamanho_fonte": config_marker.get("legenda_tamanho_fonte", 0.8),
+        "opacidade": config_marker.get("legenda_opacidade", 255),
+        "cor_fundo": config_marker.get("legenda_cor_fundo", "#000000"),
+        "cor_texto": config_marker.get("legenda_cor_texto", "#ffffff"),
+    }
+    img_com_legenda = adicionar_legenda(
+        img_marcada, marcacoes, nomes_personalizados, config_legenda
+    )
+    img_com_legenda_bgr = cv2.cvtColor(img_com_legenda, cv2.COLOR_RGB2BGR)
+
+    img_dir = os.path.dirname(os.path.abspath(IMG_PATH)) if IMG_PATH else "."
+    saida_img = os.path.join(img_dir, f"{nome_base}_marcado.png")
+    print(f"[DEBUG] Salvando imagem em: {saida_img}")
+    cv2.imwrite(saida_img, img_com_legenda_bgr)
 
     # Salvar CSV de contagem
-    csv_file = f"{nome_base}_contagem.csv"
+    csv_file = os.path.join(img_dir, f"{nome_base}_contagem.csv")
     with open(csv_file, "w") as f:
         f.write("numero,tipo,x,y\n")
         for x, y, n, t in marcacoes:
             f.write(f"{n},{t},{x},{y}\n")
 
     # Salvar arquivo de coordenadas
-    txt_file = f"{nome_base}_coordenadas.txt"
+    txt_file = os.path.join(img_dir, f"{nome_base}_coordenadas.txt")
     with open(txt_file, "w") as f:
         f.write(f"# {nome_base}\n")
         f.write(f"# Total: {len(marcacoes)}\n\n")
@@ -1273,6 +1815,51 @@ def contagem_tipo():
     tipo = data.get("tipo", "")
     count = sum(1 for m in marcacoes if m[3] == tipo)
     return jsonify({"count": count})
+
+
+@app.route("/atualizar-config", methods=["POST"])
+def atualizar_config():
+    global config_marker
+    data = request.json
+    config_marker["raio"] = data.get("raio", config_marker.get("raio", 35))
+    config_marker["espessura"] = data.get(
+        "espessura", config_marker.get("espessura", 3)
+    )
+    config_marker["fonte_escala"] = data.get(
+        "fonte_escala", config_marker.get("fonte_escala", 1.2)
+    )
+    config_marker["fonte_grossura"] = data.get(
+        "fonte_grossura", config_marker.get("fonte_grossura", 3)
+    )
+    config_marker["cor_borda"] = data.get(
+        "cor_borda", config_marker.get("cor_borda", "#000000")
+    )
+    config_marker["cor_texto"] = data.get(
+        "cor_texto", config_marker.get("cor_texto", "#ffffff")
+    )
+    return jsonify({"ok": True})
+
+
+@app.route("/atualizar-config-legenda", methods=["POST"])
+def atualizar_config_legenda():
+    global config_marker
+    data = request.json
+    config_marker["legenda_posicao"] = data.get(
+        "posicao", config_marker.get("legenda_posicao", "baixo-dir")
+    )
+    config_marker["legenda_tamanho_fonte"] = data.get(
+        "tamanho_fonte", config_marker.get("legenda_tamanho_fonte", 0.8)
+    )
+    config_marker["legenda_opacidade"] = data.get(
+        "opacidade", config_marker.get("legenda_opacidade", 255)
+    )
+    config_marker["legenda_cor_fundo"] = data.get(
+        "cor_fundo", config_marker.get("legenda_cor_fundo", "#000000")
+    )
+    config_marker["legenda_cor_texto"] = data.get(
+        "cor_texto", config_marker.get("legenda_cor_texto", "#ffffff")
+    )
+    return jsonify({"ok": True})
 
 
 def main():

@@ -1,71 +1,52 @@
-# SINAPI Pipeline
+# Element Counter
 
-Ferramentas Python para análise de custos e quantitativos da construção civil usando o banco de dados SINAPI (Sistema Nacional de Pesquisa de Custos e Índices da Construção Civil).
+Interactive web-based tool for marking and counting elements on construction plans (PDF/images).
 
-## Estrutura
+## Features
 
-```
-sinapi/
-├── src/
-│   ├── __init__.py
-│   ├── contar_elementos.py     # Contador interativo de elementos em plantas
-│   ├── analise_visual.py     # Extração visual de dados via OCR
-│   ├── estimar_quantidades.py # Estimativa de quantidades
-│   ├── gerar_relatorio.py   # Geração de relatórios LaTeX
-│   └── exploracao_sinapi.py  # Exploração de dados SINAPI
-├── data/
-│   ├── ELE.pdf              # Projeto arquitetônico
-│   └── SINAPI_Custo_Ref_*.xlsx # Banco de dados SINAPI
-├── output/
-│   └── *.csv, *.tex, *.md   # Resultados gerados
-└── docs/
-```
+- **Interactive Marking**: Click on plans to mark elements
+- **Multiple Categories**: Organize elements by discipline (Electrical, SPDA, Pumps, Junctions)
+- **Custom Markers**: Adjust marker size, border color, text color
+- **Overlay Legend**: Legend positioned over the image (no dimension changes)
+- **UTF-8 Support**: Full support for Portuguese characters (ç, ã, ó, etc.)
+- **Export**: Save marked images with legend, CSV and TXT files with coordinates
 
-## Instalação
+## Installation
 
 ```bash
-pip install -r requirements.txt
+pip install opencv-python numpy flask pdf2image pillow
 ```
 
-## Uso
-
-### Contador de Elementos (Web)
-
-Contagem interativa de elementos em plantas:
+## Usage
 
 ```bash
-python src/contar_elementos.py data/ELE.pdf --port 5000
+python src/contar_elementos.py path/to/your/plan.pdf
 ```
 
-Acesse: http://localhost:5000
+Open your browser at `http://localhost:5000`
 
-### Exploração de Dados SINAPI
+### Controls
 
-```bash
-python src/exploracao_sinapi.py
-```
+- **Click**: Mark element
+- **WASD**: Pan image
+- **Q/E**: Zoom in/out
+- **Z/Y**: Undo/Redo
+- **1-9**: Quick element selection
 
-### Estimativa de Quantidades
+### Legend Controls
 
-```bash
-python src/estimar_quantidades.py
-```
+- **Position**: Choose corner (bottom-right, bottom-left, top-right, top-left)
+- **Font Size**: Adjust (0.5 - 5.0)
+- **Transparency**: Background opacity (0-255)
+- **Colors**: Customize background and text colors
 
-### Geração de Relatório LaTeX
+## Output Files
 
-```bash
-python src/gerar_relatorio.py
-```
+When saving, generates:
+- `*_marcado.png` - Image with markers and legend
+- `*_contagem.csv` - CSV with element counts
+- `*_coordenadas.txt` - Text file with coordinates
 
-## Dependências
-
-- opencv-python
-- numpy
-- pdf2image
-- flask
-- pandas
-- matplotlib
-
-## Licença
+## License
 
 MIT

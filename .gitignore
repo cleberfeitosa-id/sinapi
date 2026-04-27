@@ -39,9 +39,16 @@ env/
 .DS_Store
 Thumbs.db
 
-# Data files - optional large files
-# Uncomment if needed:
-# data/*.xlsx
-# data/*.pdf
-output/*.pdf
-output/*.xlsx
+# Data files - private/sensitive (DO NOT COMMIT)
+data/*.pdf
+data/*.xlsx
+data/*.csv
+data/*.txt
+output/
+*.png
+*.csv
+*.txt
+*.log
+
+# Ruff
+.ruff_cache/

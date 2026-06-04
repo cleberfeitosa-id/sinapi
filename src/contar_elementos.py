@@ -43,7 +43,6 @@ DPI = 150
 img_global = None
 nome_base = ""
 marcacoes = []
-contador = 1
 tipo_atual = "tomada_bx"
 offset_x = 0
 offset_y = 0
@@ -1541,15 +1540,15 @@ def get_dimensoes():
 
 @app.route("/add-marcacao", methods=["POST"])
 def add_marcacao():
-    global contador, marcacoes
+    global marcacoes
 
     data = request.json
     x = int(data["x"])
     y = int(data["y"])
     tipo = data["tipo"]
 
-    marcacoes.append((x, y, contador, tipo))
-    contador += 1
+    num = sum(1 for m in marcacoes if m[3] == tipo) + 1
+    marcacoes.append((x, y, num, tipo))
 
     return jsonify({"ok": True})
 
@@ -1676,14 +1675,10 @@ def remover_categoria():
 
 @app.route("/undo", methods=["POST"])
 def undo():
-    global marcacoes, contador
+    global marcacoes
     # Simplified - just clear last
     if marcacoes:
         marcacoes.pop()
-        if marcacoes:
-            contador = max(m[2] for m in marcacoes) + 1
-        else:
-            contador = 1
     return jsonify({"ok": True})
 
 
@@ -1803,9 +1798,8 @@ def salvar():
 
 @app.route("/reset-all", methods=["POST"])
 def reset_all():
-    global marcacoes, contador
+    global marcacoes
     marcacoes = []
-    contador = 1
     return jsonify({"ok": True})
 
 
